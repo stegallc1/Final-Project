@@ -1,0 +1,132 @@
+--Table variable for Gate Appointment Data.
+	DECLARE @TV_GateAppt TABLE 
+	(
+		[GateAppt_Id] [BIGINT] NULL,
+		[ApptStatus_Cd] [CHAR](1)  NULL,
+		--[Company_Id] [BIGINT]  NULL,
+		--[Company_Nm] [VARCHAR](100)  NULL,
+		[Shift_Num] [INT] NULL,
+		[Shift_Dsc] [VARCHAR] (10) NULL,
+		[ShippingLine_Cd] [VARCHAR] (4) NULL,
+		ApptType_Cd CHAR(2)
+	)
+
+	--Table variable for holding Company Id's Over 25% Missed Appointments
+	--DECLARE @TVCompany TABLE
+	--(
+	--	[Company_Id] [BIGINT] NULL
+	--)
+	
+	-- Table Variable for Summary Appointment Data.
+	DECLARE @TV_SummaryAppts TABLE
+	(
+		 --[Company_Id] BIGINT DEFAULT 0
+		--,[Company_Nm] VARCHAR(100) DEFAULT NULL
+		 [Shift_Num] INT DEFAULT 0
+		,[Shift_Dsc] VARCHAR(10) DEFAULT NULL	
+		,[ShippingLine_Cd] VARCHAR(4) DEFAULT NULL
+		,[ApptCompleted] BIGINT DEFAULT 0
+		,[ApptMissed] BIGINT DEFAULT 0
+		,[ApptCancelled] BIGINT DEFAULT 0
+		,[ApptTotal] AS ApptCompleted + ApptCancelled + ApptMissed
+		--,[ApptMissedPer] AS (([ApptMissed]*100) / ([ApptCompleted] + [ApptCancelled] + [ApptMissed]))
+		,ApptType_Cd CHAR(2)
+
+	)
+
+	/**************************************
+		Insert raw summary data
+	***************************************/
+	-- Gate Appointment data.
+	INSERT INTO @TV_GateAppt
+	(
+		    [GateAppt_Id]
+		   ,[ApptStatus_Cd]
+		   --,[Company_Id]
+		   --,[Company_Nm]	
+		   ,[Shift_Num]
+		   ,[Shift_Dsc] 
+		   ,[ShippingLine_Cd] 
+		   ,ApptType_Cd
+	)
+	SELECT DISTINCT	GA.[GateAppt_Id]
+			,GA.[ApptStatus_Cd]
+			--,GA.[Company_Id]
+			--,CM.[Company_Nm]
+			,GA.[Shift_Num]
+			,SH.[Shift_Dsc]	
+			,GA.[ShippingLine_Cd]	
+			,ApptType_Cd		
+		 
+	FROM TN_GateAppt		GA		(NOLOCK)
+	--JOIN RG_Company			CM		(NOLOCK) ON GA.Company_Id = CM.Company_Id
+    --JOIN RG_TruckingCompany TC		(NOLOCK) ON TC.Company_Id = CM.Company_Id
+	--JOIN RG_MTOTrucker		MT		(NOLOCK) ON TC.TruckingCompany_Id = MT.TruckingCompany_Id
+	JOIN RG_Shift           SH      (NOLOCK) ON GA.Shift_Num = SH.Shift_Num
+	WHERE CONVERT(DATETIME, GA.GateAppt_Dt) BETWEEN @FromDate AND @ToDate	
+	--AND	((@TruckingCompanyID IS NULL) OR (GA.Company_Id = @TruckingCompanyID))
+	AND ((@ShiftNum = 0) OR (GA.Shift_Num = @ShiftNum))
+	AND	((@ShippingLine IS NULL) OR (GA.ShippingLine_Cd = @ShippingLine))
+	AND	  GA.MTO_Id	= @MTO_Id
+	AND   GA.ApptStatus_Cd IN ('D', 'M', 'X')
+	AND   GA.ShippingLine_Cd IS NOT NULL
+
+	/**************************************	
+		Update Trucking Company, shift &amp; shippingLine Info into summary table.
+	***************************************/
+		
+		INSERT INTO @TV_SummaryAppts (Shift_Dsc, Shift_Num, ShippingLine_Cd, ApptType_Cd ) 
+		SELECT DISTINCT GA.Shift_Dsc, GA.Shift_Num, GA.ShippingLine_Cd		, ApptType_Cd 
+		FROM @TV_GateAppt GA 
+		ORDER BY GA.ShippingLine_Cd
+
+	/**************************************		
+		Update Completed, Missed and Cancelled appointments('D','M','X').
+		into summary table.
+	***************************************/
+	-- Appointments Completed.
+	UPDATE SA
+	SET SA.ApptCompleted = GA.ApptCompleted
+	FROM @TV_SummaryAppts SA
+	JOIN (SELECT COUNT(GateAppt_Id) AS [ApptCompleted] , Shift_Num, ShippingLine_Cd , ApptType_Cd 
+			FROM @TV_GateAppt 
+			WHERE ApptStatus_Cd IN('D') 
+			GROUP BY Shift_Num, ShippingLine_Cd, ApptType_Cd ) GA ON SA.Shift_Num = GA.Shift_Num AND SA.ShippingLine_Cd = GA.ShippingLine_Cd AND sa.ApptType_Cd = ga.ApptType_Cd 
+
+	-- Appointments Missed.
+	UPDATE SA
+	SET SA.ApptMissed = GA.ApptMissed
+	FROM @TV_SummaryAppts SA
+	JOIN (SELECT COUNT(GateAppt_Id) AS [ApptMissed], Shift_Num, ShippingLine_Cd , ApptType_Cd
+			FROM @TV_GateAppt 
+			WHERE ApptStatus_Cd ='M' 
+			GROUP BY Shift_Num, ShippingLine_Cd, ApptType_Cd ) GA ON SA.Shift_Num = GA.Shift_Num AND SA.ShippingLine_Cd = GA.ShippingLine_Cd AND sa.ApptType_Cd = ga.ApptType_Cd 
+			
+	-- Appointments Cancelled.
+	UPDATE SA
+	SET SA.ApptCancelled = GA.ApptCancelled
+	FROM @TV_SummaryAppts SA
+	JOIN (SELECT COUNT(GateAppt_Id) AS [ApptCancelled] , Shift_Num, ShippingLine_Cd , ApptType_Cd
+			FROM @TV_GateAppt 
+			WHERE ApptStatus_Cd ='X' 
+			GROUP BY Shift_Num, ShippingLine_Cd, ApptType_Cd ) GA ON SA.Shift_Num = GA.Shift_Num AND SA.ShippingLine_Cd = GA.ShippingLine_Cd AND sa.ApptType_Cd = ga.ApptType_Cd 
+	
+	--Filter SummaryAppts data to get over 25% appointments summary only.
+	--INSERT INTO @TVCompany (Company_Id) 
+	--SELECT Company_Id FROM @TV_SummaryAppts
+	--GROUP BY Company_Id,ApptMissed,ApptTotal
+	--HAVING CAST(ROUND(ApptMissed*100/ApptTotal,2) AS NUMERIC(36,0)) &gt;= 25
+
+	-- Summary Appointments table data.		
+	SELECT 		
+		--Company_Nm,
+		Shift_Dsc,
+		ShippingLine_Cd,
+		ApptCompleted,
+		ApptMissed,
+		ApptCancelled,
+		ApptTotal,
+	    ApptType_Cd
+	FROM @TV_SummaryAppts
+	--WHERE Company_Id IN (SELECT Company_Id FROM @TVCompany)	
+	ORDER BY ShippingLine_Cd

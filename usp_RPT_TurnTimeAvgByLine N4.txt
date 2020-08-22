@@ -1,0 +1,94 @@
+USE [TOSGateway]
+GO
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- =============================================
+-- Author:	 Alex Chernyak, Advent Intermodal Solutions
+-- Create date: 11/12/2018
+-- Description: Procedure for Over 60 Minutes report.  
+--              This procedure references the following objects:
+--              * [vwTruckTransWithTurnTime] (view)
+-- Modified by T. Reilly, Advent Intermodal Solutions
+-- Modify date:  3/14/2019
+-- Description:  To prevent parameter sniffing and improve performance,
+--               assigned parameters to report variables. 
+-- =============================================
+CREATE PROCEDURE [dbo].[usp_RPT_TurnTimeAvgByLine]     
+	@Line nvarchar(MAX) = 'ALL'
+   ,@StartDate datetime
+   ,@EndDate datetime
+   ,@TruckingCompany nvarchar(MAX) = 'ALL'
+   ,@DIAverageTime nvarchar(100) = 'DI'
+AS  
+BEGIN
+	SET NOCOUNT ON;
+
+	DECLARE @tLines TABLE
+	(
+	[LineId]       NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tLines
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@Line, ',');
+
+    DECLARE @tTruckers TABLE
+	(
+	[TruckerId]    NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tTruckers
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@TruckingCompany, ',');
+
+	DECLARE @dStartDt     DATETIME = @StartDate
+		   ,@dEndDt       DATETIME = @EndDate
+		   ,@vDIAvgTime   NVARCHAR(100) = @DIAverageTime;
+
+
+	--DataSet3 in Over 60 Minutes report
+	---------------------------------------------------------------------------------		  
+	SELECT 
+		 b.line_id
+		,count(b.[trans_type]) as TypeCount
+		,sum(b.elapsed_time)/count(b.[trans_type]) as AvgTurnTime
+	FROM
+	(
+			SELECT
+				CASE WHEN tt.line_id IN ('MAE', 'SUD', 'SAF', 'SEA') THEN 'MAE'
+				  WHEN tt.line_id IN ('CMA', 'APL', 'USL') THEN 'CMA'
+				  ELSE tt.line_id
+				END AS line_id
+				,tt.[trans_type]
+				,tt.turn_time as [elapsed_time]
+			FROM [dbo].[vwTruckTransWithTurnTime] tt
+			WHERE 
+			( tt.[truck_entered] BETWEEN @dStartDt AND @dEndDt )
+			AND   (tt.line_id	IN (SELECT * FROM @tLines) OR
+				   'ALL'		IN (SELECT * FROM @tLines)) 
+			AND   (tt.[trucker_id]	IN (SELECT * FROM @tTruckers) OR
+				   'ALL'		    IN (SELECT * FROM @tTruckers))
+			AND ( 
+						( 'ALL' IN (@vDIAvgTime) )
+					OR	( 'EXCLUDE CHASSIS' IN (@vDIAvgTime) AND tt.[trans_type] NOT IN ('DC', 'RC') )
+					OR  ( 'DELIVER ONLY' IN (@vDIAvgTime) AND tt.[trans_type] IN ('DC', 'DI', 'DM') )
+					OR	( tt.[trans_type] IN (@vDIAvgTime)) 
+				)
+	) AS b
+	GROUP BY b.line_id
+	WITH ROLLUP
+	--OPTION (RECOMPILE)
+	;
+END
+
+
+
+GO
+
+

@@ -1,0 +1,47 @@
+
+
+Vessel Start Shift 
+LOOKUPVALUE (
+	'VesselVisit'[Vessel Start],
+	'VesselVisit'[Vessel Code], 'SSRS DWELL DATA'[Vessel Code]
+)
+
+Vessel Start =
+LOOKUPVALUE (
+	'VesselVisit'[ATA],
+	'VesselVisit'[Vessel Code], 'SSRS DWELL DATA'[Vessel Code]
+)
+
+Vessel/Container Arrive=
+CONCATENATE(
+	'SSRS DWELL DATA'[Vessel Start Shift], 'SSRS DWELL DATA'[Arrival DayShift]
+)
+
+Vessel Arrive/Container Depart=
+CONCATENATE(
+	'SSRS DWELL DATA'[Vessel Start Shift], 'SSRS DWELL DATA'[Depart DayShift]
+)
+
+
+Vessel Arrive/Container Depart Shift Count =
+LOOKUPVALUE (
+	'Shift Count'[Shift Count],
+	'Shift Count'[Arrive/Move], 'SSRS DWELL DATA'[Vessel Arrive/Container Depart]
+)
+
+
+Vessel/Container Arrive Shift Count =
+LOOKUPVALUE (
+	'Shift Count'[Shift Count],
+	'Shift Count'[Arrive/Move], 'SSRS DWELL DATA'[Vessel/Container Arrive]
+)
+
+
+Running Count = 
+COUNTROWS(
+    FILTER(
+        ALL(Data),
+        Data[Index] <= EARLIER(Data[Index]) &&
+        Data[Heros] = EARLIER(Data[Heros])
+    )
+)

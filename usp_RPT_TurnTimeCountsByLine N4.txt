@@ -1,0 +1,90 @@
+USE [TOSGateway]
+GO
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- =============================================
+-- Author:	 Alex Chernyak, Advent Intermodal Solutions
+-- Create date: 11/12/2018
+-- Description: Procedure for Over 60 Minutes report.  
+--              This procedure references the following objects:
+--              * [vwTruckTransWithTurnTime] (view)
+-- Modified by T. Reilly, Advent Intermodal Solutions
+-- Modify date:  3/14/2019
+-- Description:  To prevent parameter sniffing and improve performance,
+--               assigned parameters to report variables. 
+-- =============================================
+CREATE PROCEDURE [dbo].[usp_RPT_TurnTimeCountsByLine]     
+	@Line nvarchar(MAX) = 'ALL'
+   ,@StartDate datetime
+   ,@EndDate datetime
+   ,@TruckingCompany nvarchar(MAX) = 'ALL'
+   ,@RMContainerCount nvarchar(100) = 'RM'
+AS  
+BEGIN
+	SET NOCOUNT ON;
+
+	DECLARE @tLines TABLE
+	(
+	[LineId]       NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tLines
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@Line, ',');
+
+    DECLARE @tTruckers TABLE
+	(
+	[TruckerId]    NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tTruckers
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@TruckingCompany, ',');
+
+	DECLARE @dStartDt     DATETIME = @StartDate
+		   ,@dEndDt       DATETIME = @EndDate
+		   ,@vRMCount     NVARCHAR(100) = @RMContainerCount;
+
+
+	--DataSet4 in Over 60 Minutes report
+	---------------------------------------------------------------------------------		  
+	SELECT 
+		 b.line_id
+		,count(b.[trans_type]) AS TypeCount
+	FROM
+	(
+		SELECT
+			 CASE WHEN tt.line_id IN ('MAE', 'SUD', 'SAF', 'SEA') THEN 'MAE'
+				WHEN tt.line_id IN ('CMA', 'APL', 'USL') THEN 'CMA'
+		      		ELSE tt.line_id
+			 END AS line_id
+			,tt.[trans_type]
+		FROM [dbo].[vwTruckTransWithTurnTime] tt
+		WHERE 
+		( tt.[truck_entered] BETWEEN @dStartDt AND @dEndDt )
+		AND   (tt.line_id	IN (SELECT * FROM @tLines) OR
+			   'ALL'		IN (SELECT * FROM @tLines)) 
+		AND   (tt.[trucker_id]	IN (SELECT * FROM @tTruckers) OR
+			   'ALL'		    IN (SELECT * FROM @tTruckers))
+		AND ( 
+			( 'ALL' IN (@RMContainerCount) )
+			OR	( 'EXCLUDE CHASSIS' IN (@vRMCount) AND tt.[trans_type] NOT IN ('DC', 'RC') )
+			OR  ( 'DELIVER ONLY' IN (@vRMCount) AND tt.[trans_type] IN ('DC', 'DI', 'DM') )
+			OR	( tt.[trans_type] IN (@vRMCount)) 
+			)
+	) AS b
+	GROUP BY b.line_id
+	--OPTION (RECOMPILE)
+	;
+END
+
+
+GO
+
+
