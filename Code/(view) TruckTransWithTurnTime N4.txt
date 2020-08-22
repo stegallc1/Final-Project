@@ -1,0 +1,132 @@
+USE [TOSGateway]
+GO
+
+/****** Object:  View [dbo].[vwTruckTransWithTurnTime]    Script Date: 6/20/2019 2:10:20 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+/*******************************************
+Author:  T. Reilly, Advent Intermodal Solutions
+Date:    11/07/2016
+Purpose: This view contains truck transaction
+         information including turn times.  This
+		 view is used for turn time reports.  
+
+		 Note:  Business rule is:
+		 * Single RE/RM move turn time is equal
+		   to the daily average of all dual moves
+		   including an RE or RM move, otherwise
+		   subtract the trouble time from the 
+		   elapsed time to get the turn time 
+		   (values are divided by 2 in the 
+		   vwTruckTransWithTimes view if they 
+		   are dual moves).
+
+Modified 11/7/2018 by T. Reilly
+Added new columns dual_trans_gkey, dual_trans_nbr,
+eqo_nbr, ctr_gross_weight, unit_gkey, and
+appointment_nbr
+
+Modified 12/03/2018 by A.Chernyak
+for performance reasons
+
+Modified 3/22/2018 by T. Reilly
+Added ctr_ticket_pos_id, dual_ctr_ticket_pos_id
+columns
+*******************************************/ 
+
+CREATE VIEW [dbo].[vwTruckTransWithTurnTime] 
+AS 
+SELECT t.[gkey]
+      ,t.[transaction_nbr]
+      ,t.[eq_nbr]
+      ,t.[eqsz_id]
+      ,t.[eqht_id]
+      ,t.[eqtp_id]
+      ,t.[truck_entered]
+      ,t.[truck_exited]
+      ,t.[in_time]
+      ,t.[chs_nbr]
+      ,t.[truck_license_nbr]
+      ,t.[truck_entered_lic]
+      ,t.[date_id]
+      ,t.[line_id]
+      ,t.[trans_type]
+      ,t.[trans_type_text]
+      ,t.[trucker_id]
+      ,t.[trucker_name]
+      ,t.[location_code]
+      ,t.[ship_id]
+      ,t.[voy_nbr]
+      ,t.[voy_ata]
+      ,t.[wheeled_grounded]
+      ,t.[group_id]
+      ,t.[trouble_fl]
+      ,t.[haz_fl]
+      ,t.[oog_fl]
+      ,t.[reefer_fl]
+      ,t.[pol]
+      ,t.[pod]
+      ,t.[start_time]
+      ,t.[end_time]
+      ,ROUND(t.[elapsed_time], 3) AS elapsed_time
+      ,ROUND(t.[full_elapsed_time], 3) AS full_elapsed_time
+      ,t.[trouble_start]
+      ,ROUND(t.[trouble_time], 3) AS trouble_time
+      ,ROUND(t.[full_trouble_time], 3) AS full_trouble_time
+      ,CASE
+           WHEN t.[dual_move_fl] = 'N' AND 
+                t.[trans_type] = 'RE' THEN
+               (SELECT ROUND((AVG(q.[full_elapsed_time]) - AVG(q.[full_trouble_time])) / 2, 3)
+                FROM   [dbo].[vwTruckTransWithTimes] AS q WITH (NOLOCK)
+                WHERE  q.[dual_move_fl] = 'Y'
+                AND    (q.[trans_type] = 'RE' OR q.[dual_type] ='RE')
+                AND    q.[trunc_truck_entered] = t.[trunc_truck_entered]
+               )
+           WHEN t.[dual_move_fl] = 'N' AND 
+                t.[trans_type] = 'RM' THEN
+               (SELECT ROUND((AVG(q.[full_elapsed_time]) - AVG(q.[full_trouble_time])) / 2, 3)
+                FROM   [dbo].[vwTruckTransWithTimes] AS q WITH (NOLOCK)
+                WHERE  q.[dual_move_fl] = 'Y'
+                AND    (q.[trans_type] = 'RM' OR q.[dual_type] ='RM')
+                AND    q.[trunc_truck_entered] = t.[trunc_truck_entered]
+               )
+           ELSE
+               ROUND(t.[elapsed_time] - t.[trouble_time], 3)
+       END AS turn_time
+      ,t.[shift_nbr]
+      ,t.[break_time]
+      ,t.[dual_type]
+      ,t.[dual_line]
+      ,t.[dual_reefer]
+      ,t.[dual_wheeled_grounded]
+      ,t.[dual_move_fl]
+      ,t.[dual_trans_gkey]
+      ,t.[dual_trans_nbr]
+	  ,t.[dual_ctr_ticket_pos_id]
+      ,t.[entry_lane]
+      ,t.[exit_lane]
+      ,t.[truck_entered_day]
+      ,t.[truck_entered_prior_day]
+      ,t.[trunc_truck_entered]
+      ,t.[ctr_pos_id]
+	  ,t.[ctr_ticket_pos_id]
+      ,t.[ctr_gross_weight]
+      ,t.[eqo_nbr]
+      ,t.[unit_gkey]
+      ,t.[appointment_nbr]
+FROM   [dbo].[vwTruckTransWithTimes]   AS t WITH (NOLOCK)
+
+
+
+GO
+
+

@@ -1,0 +1,78 @@
+USE [TOSGateway]
+GO
+
+/****** Object:  StoredProcedure [dbo].[usp_RPT_OCSLoadedInYard]    Script Date: 6/20/2019 1:47:31 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE PROCEDURE [dbo].[usp_RPT_OCSLoadedInYard]
+	@StartDate   DATETIME, 
+	@EndDate     DATETIME
+AS
+--  This procedure is for the OCS Loaded Showing In Yard - LSAN4 report.  It shows containers
+--  loaded by crane onto vessels in the OCS_Crane database but showing in N4 as still in yard.
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+
+	WITH q_ocs_load AS (SELECT CASE
+								   WHEN ocsv1.[OCRNumber] LIKE '...%' AND ocsv1.[ValNumber] IS NOT NULL THEN  
+									   ocsv1.[ValNumber]
+								   ELSE 
+									   ocsv1.[OCRNumber]
+							   END AS [ContainerNumber],
+							   ocsv1.[TRXNEndTs] AS [LoadTime],
+							   ocsv1.[OCRNodeName],
+							   ocsv1.[VesselVoyage]
+						FROM   [OCS_Crane].[dbo].[OCSCraneTransactionSummaryView]  AS ocsv1
+						WHERE  ocsv1.[OCRComponent] = 'CONTAINER'
+						AND    NOT (ocsv1.[OCRNumber] LIKE '...%' AND
+									ISNULL(ocsv1.[ValNumber], '.....') LIKE '...%')
+						AND    ocsv1.[MoveType] = 'LOAD'
+						AND    ocsv1.[TRXNEndTs] BETWEEN @StartDate 
+												 AND     @EndDate)
+	SELECT ocsl.[LoadTime],
+		   u.[id] AS ContainerNumber,
+		   uf.[last_pos_name] AS YardPosition,
+		   ocsl.[OCRNodeName] AS Crane,
+		   ocsl.[VesselVoyage] AS OCSVesselVoyage,
+		   cv.[id] AS N4VesselVoyage
+	FROM   [SparcsN4R].[dbo].[inv_unit_fcy_visit] AS uf
+	JOIN   [SparcsN4R].[dbo].[inv_unit]           AS u    ON u.[gkey] = uf.[unit_gkey] 
+	JOIN   [SparcsN4R].[dbo].[argo_carrier_visit] AS cv   ON cv.[gkey] = ISNULL(uf.[intend_ob_cv], uf.[actual_ob_cv])
+	JOIN   q_ocs_load                             AS ocsl ON ocsl.[ContainerNumber] = u.[id] AND
+															 NOT EXISTS (SELECT 'X'
+																		 FROM   [OCS_Crane].[dbo].[OCSCraneTransactionSummaryView] AS ocsv2
+																		 WHERE  CASE
+																					WHEN ocsv2.[OCRNumber] LIKE '...%' AND ocsv2.[ValNumber] IS NOT NULL THEN  
+																						ocsv2.[ValNumber]
+																					ELSE 
+																						ocsv2.[OCRNumber]
+																				END = u.[id] 
+																		 AND    ocsv2.[OCRComponent] = 'CONTAINER'
+																		 AND    ocsv2.[MoveType] IN ('DISCHARGE',
+																									 'GND_TO_GND')
+																		 AND    ocsv2.[VesselVoyage] = ocsl.[VesselVoyage]
+																		 AND    ocsv2.[TRXNEndTs] BETWEEN @StartDate
+																								  AND     @EndDate)
+	WHERE  uf.[last_pos_name] LIKE 'Y-LAX%'
+	AND    uf.[transit_state] IN ('S30_ECIN',
+	                              'S40_YARD',
+	                              'S50_ECOUT',
+								  'S60_LOADED')
+    AND    uf.[time_in] = (SELECT MAX(uf2.[time_in])
+	                       FROM   [SparcsN4R].[dbo].[inv_unit_fcy_visit]  AS uf2
+						   WHERE  uf2.[unit_gkey] = u.[gkey] 
+						   AND    uf2.[time_in] <= ocsl.[LoadTime])
+	ORDER  BY ocsl.[LoadTime] DESC;
+
+END
+
+GO
+
+

@@ -1,0 +1,230 @@
+USE [TOSGateway]
+GO
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- =============================================
+-- Author:	 Alex Chernyak, Advent Intermodal Solutions
+-- Create date: 11/12/2018
+-- Description: Procedure for Over 60 Minutes report.  
+--              This procedure references the following objects:
+--              * [vwTruckTransWithTurnTime] (view)
+--              * [vwUnit] (view)
+--
+-- Modified by T. Reilly, Advent Intermodal Solutions
+-- Modify date:  3/14/2019
+-- Description:  To prevent parameter sniffing and improve performance,
+--               assigned parameters to report variables. 
+-- =============================================
+CREATE PROCEDURE [dbo].[usp_RPT_TurnTime60Min]     
+	@Line nvarchar(MAX) = 'ALL'
+   ,@GroupId nvarchar(25) = 'ALL'
+   ,@StartDate datetime
+   ,@EndDate datetime
+   ,@TruckingCompany nvarchar(MAX) = 'ALL'
+   ,@TransactionType nvarchar(MAX) = 'ALL'
+AS  
+BEGIN
+	SET NOCOUNT ON;
+
+	DECLARE @tLines TABLE
+	(
+	[LineId]       NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tLines
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@Line, ',');
+
+    DECLARE @tTruckers TABLE
+	(
+	[TruckerId]    NVARCHAR(10)
+	);
+	INSERT
+	INTO   @tTruckers
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@TruckingCompany, ',');
+
+	DECLARE @tTransTypes TABLE
+	(
+	[TransType]    NVARCHAR(20)
+	);
+	INSERT
+	INTO   @tTransTypes
+	SELECT [Item]
+	FROM   [dbo].[TFN_ParseArray](@TransactionType, ',');
+
+	DECLARE @vGroupId  NVARCHAR(25) = @GroupId
+	       ,@dStartDt  DATETIME = @StartDate
+		   ,@dEndDt    DATETIME = @EndDate;
+
+
+	--Over 60 Min 
+	-- =====================================================
+	-- Over 60 Minutes
+	-- The Over 60 Minutes report displays data for all completed gate transactions that
+	-- delivered a container.
+	-- For N4, we are combining two reports, [Over 60 Minutes] and [Over 60 Minutes - All Moves] by adding a parameter for transaction type.
+	-- =====================================================
+
+	-- Notes for future verification of requirements:
+	---- Review how inbound_carrier and depart_carrier are assembled.
+	---- Confirm that entered_yard and exited_yard are right for start_time and end_time, respectively.
+	---- Test weight_class.  This includes confirming that weight_classes_resolved gets what we want.
+	---- I see how dual transactions are handled.  But can there truck visits with 3 or more transactions of different types, where total minutes need to be divided by something other than 2?
+	---- Why is there nothing that's actually checking if anything is over 60?
+	---- Old query used tt.group but report always sets Group parameter to ALL.
+
+	SELECT a.nbr AS transactions
+		  ,a.ctr_nbr
+		  ,a.truckco_id
+		  ,a.name
+		  ,a.truck_license_nbr
+		  ,CASE 
+		       WHEN a.line_id IN ('MAE', 'SUD', 'SAF', 'SEA') THEN 'MAE'
+		       WHEN a.line_id IN ('CMA', 'APL', 'USL') THEN 'CMA'
+		       ELSE a.line_id
+		   END AS line_id
+		  ,a.sub_type
+		  ,a.ctr_eqtp_id
+		  ,a.ctr_eqsz_id
+		  ,a.ctr_eqht_id
+		  ,a.start_time
+		  ,a.end_time
+		  ,a.elapsed_time
+		  ,IIF(a.dual_type = 'N', 'SINGLE', 'DUAL') AS dual_status
+		  ,IIF(a.dual_nbr IS NULL, 'NONE', CONVERT(VARCHAR, a.dual_nbr)) AS dual_nbr
+		  ,a.ctr_ticket_pos_id as position
+		  ,a.location_code
+		  ,CASE 
+		       WHEN ( DATEPART(hh, a.start_time) BETWEEN 7 AND 16 ) THEN '1st'
+			   WHEN ( DATEPART(hh, a.start_time) BETWEEN 3 AND 6 ) THEN '3rd'
+			   ELSE '2nd'
+		   END AS shift
+		  ,IIF(DATEPART(hh, a.start_time) < 3, DATENAME(dw, a.start_time - 1), DATENAME(dw, a.start_time)) AS entered_day
+		  ,a.exempt_move
+		  ,a.haz_fl
+		  ,a.oog_fl
+		  ,CASE a.wheeled_grounded 
+		       WHEN 'G' THEN 'Ground'
+			   WHEN 'W' THEN 'Wheels'
+			   ELSE a.wheeled_grounded
+		   END AS wheeled
+		  ,a.trouble_fl
+		  ,a.inbound_carrier
+		  ,a.arrive_type
+		  ,a.depart_carrier
+		  ,a.service_id
+		  ,a.ctr_gross_weight
+		  ,a.discharge_point_id1
+		  ,a.eqo_nbr
+		  ,a.chs_id
+
+			--,a.truck_entered
+			--,a.truck_exited
+			--,a.fcy_time_move
+			--,a.time_in
+			--,a.time_out
+
+	FROM
+	(
+		SELECT
+			 tt.gkey
+			,tt.transaction_nbr AS nbr
+			,tt.truck_entered AS truck_entered
+			,tt.line_id
+			,tt.trans_type AS sub_type
+			,tt.truck_license_nbr AS truck_license_nbr
+			,tt.location_code AS location_code
+			,tt.eq_nbr AS ctr_nbr
+			,tt.trucker_id AS truckco_id
+			,tt.trucker_name AS name
+			,tt.eqtp_id AS ctr_eqtp_id
+			,tt.eqsz_id AS ctr_eqsz_id
+			,tt.eqht_id AS ctr_eqht_id
+			,IIF(tt.appointment_nbr IS NULL, 'X', '') AS exempt_move
+			,tt.group_id
+			,tt.haz_fl AS haz_fl
+			,tt.oog_fl AS oog_fl
+			,tt.turn_time AS elapsed_time
+			,tt.trouble_fl AS trouble_fl 
+			,tt.start_time AS start_time
+			,tt.end_time AS end_time
+			,tt.trouble_start AS trouble_start -- The outer query does not use trouble_start.  Not sure why it's here.
+			,ISNULL(tt.dual_type, 'N') AS dual_type
+			,tt.dual_line AS dual_line
+			,tt.dual_trans_nbr AS dual_nbr
+			,CASE u.arrive_pos_loctype 
+				WHEN 'TRUCK' THEN 'T ' + ISNULL(u.arrive_pos_locid, '')
+				WHEN 'VESSEL' THEN 'V ' + ISNULL(u.actual_ib_vesselname, '')
+				ELSE '- ' + ISNULL(u.arrive_pos_locid, '')
+			 END +
+			 CASE 
+				WHEN actual_ib_voyage IS NULL 
+				  THEN '' 
+				  ELSE ' - ' + actual_ib_voyage 
+			 END AS inbound_carrier
+
+			,u.arrive_pos_loctype AS arrive_type
+
+			,CASE u.last_pos_loctype 
+				WHEN 'TRUCK' THEN 'T ' + ISNULL(u.last_pos_locid, '')
+				WHEN 'VESSEL' THEN 'V ' + ISNULL(u.actual_ob_vesselname, '')
+				ELSE '- ' + ISNULL(u.last_pos_locid, '')
+			 END +
+			 CASE 
+				WHEN actual_ob_voyage IS NULL 
+				  THEN '' 
+				  ELSE ' - ' + actual_ob_voyage 
+			 END AS depart_carrier
+	
+			,ISNULL(u.actual_ob_service, u.intend_ob_service) AS service_id
+			,tt.ctr_gross_weight
+			,u.discharge_point_id1
+			,tt.eqo_nbr
+			,tt.ctr_ticket_pos_id
+			,tt.chs_nbr AS chs_id
+			,tt.wheeled_grounded
+
+			--,u.fcy_time_move
+			--,u.time_in
+			--,u.time_out
+			--,tt.truck_exited
+
+		FROM TosGateway.dbo.vwTruckTransWithTurnTime tt 
+		LEFT OUTER JOIN TosGateway.dbo.vwUnit u ON u.gkey = tt.unit_gkey AND u.time_in IS NOT NULL
+							AND (
+								((CONVERT(date,u.fcy_time_move) <= CONVERT(date,tt.[truck_exited]) OR tt.[truck_exited] IS NULL)
+								AND CONVERT(date,u.fcy_time_move) >= CONVERT(date,tt.[truck_entered]))
+								OR
+								((CONVERT(date,u.time_in) <= CONVERT(date,tt.[truck_exited]) OR tt.[truck_exited] IS NULL)
+								AND CONVERT(date,u.time_in) >= CONVERT(date,tt.[truck_entered]))
+								)
+
+		WHERE 
+			( tt.[truck_entered] BETWEEN @dStartDt AND @dEndDt )
+			AND  (tt.line_id IN (SELECT * FROM @tLines) OR
+				  'ALL'	     IN (SELECT * FROM @tLines)) 
+			AND   (tt.[trucker_id]	IN (SELECT * FROM @tTruckers) OR
+					'ALL'		    IN (SELECT * FROM @tTruckers))
+			AND ( 
+						( 'ALL' IN (SELECT * FROM @tTransTypes) )
+					OR	( 'EXCLUDE CHASSIS' IN (SELECT * FROM @tTransTypes) AND tt.[trans_type] NOT IN ('DC', 'RC') )
+					OR  ( 'DELIVER ONLY' IN (SELECT * FROM @tTransTypes) AND tt.[trans_type] IN ('DC', 'DI', 'DM') )
+					OR	( tt.[trans_type] IN (SELECT * FROM @tTransTypes) ) 
+				)
+			AND	 ( @vGroupId IN (tt.group_id, 'ALL') )
+	) a
+	--OPTION (RECOMPILE)
+	;
+
+END
+
+GO
+
+
